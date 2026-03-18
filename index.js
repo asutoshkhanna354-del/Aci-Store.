@@ -6,58 +6,38 @@ const pool = require('./db');
 const fs = require('fs');
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-const authRoutes = require('./routes/authRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-const storeRoutes = require('./routes/storeRoutes');
-const resellerRoutes = require('./routes/resellerRoutes');
+// Routes
+app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/store', require('./routes/storeRoutes'));
+app.use('/api/reseller', require('./routes/resellerRoutes'));
 
-app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/store', storeRoutes);
-app.use('/api/reseller', resellerRoutes);
+// Uploads (temporary, not persistent on Render)
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
-  setHeaders: (res) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'none'");
-  }
-}));
-
-app.use(express.static(path.join(__dirname, '..', 'client', 'dist'), {
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html')) {
-      res.setHeader('Cache-Control', 'no-cache');
-    }
-    if (filePath.endsWith('sw.js')) {
-      res.setHeader('Service-Worker-Allowed', '/');
-      res.setHeader('Cache-Control', 'no-cache');
-    }
-  }
-}));
-
-app.get('/{*splat}', (req, res) => {
-  const indexPath = path.join(__dirname, '..', 'client', 'dist', 'index.html');
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.send('Building frontend... please wait and refresh.');
-  }
-});
+// Start server
+const PORT = process.env.PORT || 5000;
 
 async function start() {
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  await pool.query(schema);
+  try {
+    // Run schema (only once ideally)
+    const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    await pool.query(schema);
 
-  const seed = require('./seed');
+    console.log('Database connected');
 
-  const PORT = 5000;
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+
+  } catch (err) {
+    console.error('Startup error:', err);
+  }
 }
 
-start().catch(console.error);
+start();
