@@ -6,7 +6,8 @@ const multer = require('multer');
 const pool = require('../db');
 const { authMiddleware } = require('../auth');
 
-const { sendPushToAdmins } = require('../pushNotify');
+let sendPushToAdmins = () => Promise.resolve();
+try { sendPushToAdmins = require('../pushNotify').sendPushToAdmins || sendPushToAdmins; } catch (_) {}
 const router = express.Router();
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 
