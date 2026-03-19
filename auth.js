@@ -36,14 +36,32 @@ function authMiddleware(req, res, next) {
 }
 
 function resellerMiddleware(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'Not authenticated' });
   try {
+    let token = null;
+
+    if (req.headers.authorization) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      console.log("❌ No token received");
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.is_reseller) return res.status(403).json({ error: 'Reseller access required' });
+
+    if (!decoded.is_reseller) {
+      console.log("❌ Not reseller token");
+      return res.status(403).json({ error: 'Reseller access required' });
+    }
+
+    console.log("✅ Token OK:", decoded);
+
     req.reseller = decoded;
-    next();
-  } catch {
+
+    next(); // 🔥 MUST BE HERE
+  } catch (err) {
+    console.error("❌ Middleware error:", err.message);
     return res.status(401).json({ error: 'Invalid token' });
   }
 }
