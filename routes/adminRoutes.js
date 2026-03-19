@@ -103,16 +103,16 @@ router.get('/panels', async (req, res) => {
 
 router.post('/panels', async (req, res) => {
   try {
-    const { section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, features, image_url, custom_prices } = req.body;
+    const { section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, features, image_url, custom_prices, hidden_durations } = req.body;
     const prices = [price_1day, price_7day, price_30day, price_60day].map(p => parseFloat(p) || 0);
     const rPrices = [reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day].map(p => parseFloat(p) || 0);
     for (const p of prices) {
       if (p > 0 && p < 1) return res.status(400).json({ error: 'Minimum price is $1 USD' });
     }
     const result = await pool.query(
-      `INSERT INTO panels (section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, features, image_url, custom_prices)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [section_id, name, description || '', platform || 'both', prices[0], prices[1], prices[2], prices[3], rPrices[0], rPrices[1], rPrices[2], rPrices[3], features || '', image_url || '', JSON.stringify(custom_prices || {})]
+      `INSERT INTO panels (section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, features, image_url, custom_prices, hidden_durations)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      [section_id, name, description || '', platform || 'both', prices[0], prices[1], prices[2], prices[3], rPrices[0], rPrices[1], rPrices[2], rPrices[3], features || '', image_url || '', JSON.stringify(custom_prices || {}), JSON.stringify(hidden_durations || {})]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -120,7 +120,7 @@ router.post('/panels', async (req, res) => {
 
 router.put('/panels/:id', async (req, res) => {
   try {
-    const { section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, features, is_in_stock, is_active, image_url, sort_order, custom_prices } = req.body;
+    const { section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, features, is_in_stock, is_active, image_url, sort_order, custom_prices, hidden_durations } = req.body;
     const priceFields = [price_1day, price_7day, price_30day, price_60day];
     for (const p of priceFields) {
       if (p !== undefined && p !== null) {
@@ -137,9 +137,10 @@ router.put('/panels/:id', async (req, res) => {
         sort_order=COALESCE($13,sort_order),
         reseller_price_1day=COALESCE($14,reseller_price_1day), reseller_price_7day=COALESCE($15,reseller_price_7day),
         reseller_price_30day=COALESCE($16,reseller_price_30day), reseller_price_60day=COALESCE($17,reseller_price_60day),
-        custom_prices=COALESCE($18,custom_prices)
-       WHERE id=$19`,
-      [section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, features, is_in_stock, is_active, image_url, sort_order, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, custom_prices !== undefined ? JSON.stringify(custom_prices) : null, req.params.id]
+        custom_prices=COALESCE($18,custom_prices),
+        hidden_durations=COALESCE($19,hidden_durations)
+       WHERE id=$20`,
+      [section_id, name, description, platform, price_1day, price_7day, price_30day, price_60day, features, is_in_stock, is_active, image_url, sort_order, reseller_price_1day, reseller_price_7day, reseller_price_30day, reseller_price_60day, custom_prices !== undefined ? JSON.stringify(custom_prices) : null, hidden_durations !== undefined ? JSON.stringify(hidden_durations) : null, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -159,7 +160,7 @@ router.delete('/panels/:id', async (req, res) => {
 
 router.get('/panels/:id/images', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const result = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -180,9 +181,11 @@ router.post('/panels/:id/images', mediaUpload.array('images', 20), async (req, r
     const images = [];
     for (const file of req.files) {
       const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+      const filePath = path.join(uploadsDir, file.filename);
+      const fileData = fs.readFileSync(filePath);
       const result = await pool.query(
-        'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        [panelId, file.filename, file.originalname, sortOrder++, mediaType]
+        'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type, file_data, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, panel_id, filename, original_name, sort_order, media_type, created_at',
+        [panelId, file.filename, file.originalname, sortOrder++, mediaType, fileData, file.mimetype]
       );
       images.push(result.rows[0]);
     }
@@ -651,6 +654,177 @@ router.get('/stats', async (req, res) => {
       pending_orders: parseInt(pending.rows[0].count),
       total_revenue: parseFloat(revenue.rows[0].total)
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/panel-files', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, title, description, version, file_size, update_date, thumbnail, file_path, original_filename, created_at FROM panel_files ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/panel-files', async (req, res) => {
+  try {
+    const { title, description, version, file_size, update_date, download_url, thumbnail_url } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title required' });
+    if (!download_url) return res.status(400).json({ error: 'Download URL required' });
+    const result = await pool.query(
+      'INSERT INTO panel_files (title, description, version, file_size, update_date, thumbnail, file_path, original_filename) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, title, description, version, file_size, update_date, thumbnail, file_path, original_filename, created_at',
+      [title, description || '', version || '1.0', file_size || '', update_date || new Date().toISOString().split('T')[0], thumbnail_url || '', download_url, '']
+    );
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/panel-files/:id', async (req, res) => {
+  try {
+    const { title, description, version, file_size, update_date, download_url, thumbnail_url } = req.body;
+    const existing = await pool.query('SELECT * FROM panel_files WHERE id = $1', [req.params.id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const filePath = download_url || existing.rows[0].file_path;
+    const thumbName = thumbnail_url !== undefined ? thumbnail_url : existing.rows[0].thumbnail;
+    await pool.query(
+      'UPDATE panel_files SET title=COALESCE($1,title), description=COALESCE($2,description), version=COALESCE($3,version), file_size=COALESCE($4,file_size), update_date=COALESCE($5,update_date), thumbnail=$6, file_path=$7 WHERE id=$8',
+      [title, description, version, file_size, update_date, thumbName, filePath, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/panel-files/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM panel_files WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/reseller-key-pool-bulk', async (req, res) => {
+  try {
+    const { ids, clear_sold } = req.body;
+    if (clear_sold) {
+      const result = await pool.query("DELETE FROM reseller_key_pool WHERE status = 'sold'");
+      return res.json({ success: true, deleted: result.rowCount });
+    }
+    if (ids && ids.length > 0) {
+      const result = await pool.query('DELETE FROM reseller_key_pool WHERE id = ANY($1)', [ids]);
+      return res.json({ success: true, deleted: result.rowCount });
+    }
+    res.status(400).json({ error: 'No keys specified' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/customer-key-pool-bulk', async (req, res) => {
+  try {
+    const { ids, clear_sold } = req.body;
+    if (clear_sold) {
+      const result = await pool.query("DELETE FROM customer_key_pool WHERE status = 'sold'");
+      return res.json({ success: true, deleted: result.rowCount });
+    }
+    if (ids && ids.length > 0) {
+      const result = await pool.query('DELETE FROM customer_key_pool WHERE id = ANY($1)', [ids]);
+      return res.json({ success: true, deleted: result.rowCount });
+    }
+    res.status(400).json({ error: 'No keys specified' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/upload-branding', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const { type } = req.body;
+    if (!type) return res.status(400).json({ error: 'Type required' });
+    const key = `branding_${type}`;
+    const filePath = path.join(uploadsDir, req.file.filename);
+    const fileData = fs.readFileSync(filePath);
+    await pool.query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [key, req.file.filename]
+    );
+    await pool.query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [`${key}_data`, fileData.toString('base64')]
+    );
+    await pool.query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [`${key}_mime`, req.file.mimetype]
+    );
+    res.json({ filename: req.file.filename });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/vapid-public-key', async (req, res) => {
+  try {
+    const result = await pool.query("SELECT value FROM settings WHERE key = 'vapid_public_key'");
+    res.json({ key: result.rows[0]?.value || '' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/push-subscribe', async (req, res) => {
+  try {
+    const { subscription } = req.body;
+    if (!subscription || !subscription.endpoint) return res.status(400).json({ error: 'Invalid subscription' });
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+    await pool.query(
+      `INSERT INTO push_subscriptions (user_id, endpoint, keys_p256dh, keys_auth) 
+       VALUES ($1, $2, $3, $4) 
+       ON CONFLICT (endpoint) DO UPDATE SET user_id = $1, keys_p256dh = $3, keys_auth = $4`,
+      [userId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/push-unsubscribe', async (req, res) => {
+  try {
+    const { endpoint } = req.body;
+    if (endpoint) {
+      await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint]);
+    }
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/notifications', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM admin_notifications ORDER BY created_at DESC LIMIT 100');
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/notifications/unread-count', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as count FROM admin_notifications WHERE is_read = false');
+    res.json({ count: parseInt(result.rows[0].count) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/notifications/:id/read', async (req, res) => {
+  try {
+    await pool.query('UPDATE admin_notifications SET is_read = true WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/notifications/read-all', async (req, res) => {
+  try {
+    await pool.query('UPDATE admin_notifications SET is_read = true');
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/notifications/clear-all', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM admin_notifications');
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/notifications/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM admin_notifications WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
