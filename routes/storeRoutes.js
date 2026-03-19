@@ -6,6 +6,7 @@ const multer = require('multer');
 const pool = require('../db');
 const { authMiddleware } = require('../auth');
 
+const { sendPushToAdmins } = require('../pushNotify');
 const router = express.Router();
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 
@@ -62,7 +63,7 @@ router.get('/panels', async (req, res) => {
     const panelIds = result.rows.map(p => p.id);
     let imagesMap = {};
     if (panelIds.length > 0) {
-      const imgResult = await pool.query('SELECT * FROM panel_images WHERE panel_id = ANY($1) ORDER BY sort_order, id', [panelIds]);
+      const imgResult = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, created_at FROM panel_images WHERE panel_id = ANY($1) ORDER BY sort_order, id', [panelIds]);
       imgResult.rows.forEach(img => {
         if (!imagesMap[img.panel_id]) imagesMap[img.panel_id] = [];
         imagesMap[img.panel_id].push(img);
@@ -88,7 +89,7 @@ router.get('/panels/:id', async (req, res) => {
   try {
     const result = await pool.query(`SELECT p.*, s.name as section_name FROM panels p LEFT JOIN sections s ON p.section_id = s.id WHERE p.id = $1`, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Panel not found' });
-    const images = await pool.query('SELECT * FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const images = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
     const stockResult = await pool.query(
       "SELECT duration_days, COUNT(*) as count FROM customer_key_pool WHERE panel_id = $1 AND status = 'available' GROUP BY duration_days",
       [req.params.id]
@@ -133,7 +134,7 @@ router.post('/order', authMiddleware, async (req, res) => {
     const { panel_id, duration, promo_code, payment_method, customer_email } = req.body;
     const panel = await pool.query('SELECT * FROM panels WHERE id = $1', [panel_id]);
     if (panel.rows.length === 0) return res.status(404).json({ error: 'Panel not found' });
-    if (!panel.rows[0].is_in_stock) return res.status(400).json({ error: 'Panel out of stock' });
+    // All panels are purchasable - keys will be auto-assigned if available or manually delivered by admin
 
     const p = panel.rows[0];
     let price = 0;
@@ -151,18 +152,6 @@ router.post('/order', authMiddleware, async (req, res) => {
       }
     }
     if (!price || price <= 0) return res.status(400).json({ error: 'Invalid duration' });
-
-    const durationMatch = duration.match(/^(\d+)day$/);
-    const durationDays = durationMatch ? parseInt(durationMatch[1]) : null;
-    if (durationDays) {
-      const stockCheck = await pool.query(
-        "SELECT COUNT(*) as count FROM customer_key_pool WHERE panel_id = $1 AND duration_days = $2 AND status = 'available'",
-        [panel_id, durationDays]
-      );
-      if (parseInt(stockCheck.rows[0].count) === 0) {
-        return res.status(400).json({ error: 'This duration is currently out of stock' });
-      }
-    }
 
     let discount = 0;
     if (promo_code) {
@@ -189,6 +178,31 @@ router.post('/order', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.post('/order/:id/cancel-beacon', async (req, res) => {
+  try {
+    const token = req.query.token;
+    if (!token) return res.status(401).json({ error: 'No token' });
+    const jwt = require('jsonwebtoken');
+    const { JWT_SECRET } = require('../auth');
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const order = await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, decoded.id]);
+    if (order.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    if (order.rows[0].status !== 'pending_payment') return res.json({ success: true });
+    await pool.query("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/order/:id/cancel', authMiddleware, async (req, res) => {
+  try {
+    const order = await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    if (order.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
+    if (order.rows[0].status !== 'pending_payment') return res.status(400).json({ error: 'Can only cancel pending payment orders' });
+    await pool.query("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.put('/order/:id/utr', authMiddleware, async (req, res) => {
   try {
     const { utr_number } = req.body;
@@ -196,7 +210,26 @@ router.put('/order/:id/utr', authMiddleware, async (req, res) => {
     const order = await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (order.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
 
+    if (order.rows[0].status !== 'pending_payment') {
+      return res.status(400).json({ error: 'Order is no longer awaiting payment' });
+    }
+
     await pool.query("UPDATE orders SET utr_number = $1, status = 'pending_verification', updated_at = NOW() WHERE id = $2", [utr_number, req.params.id]);
+
+    const notifEnabled = await pool.query("SELECT value FROM settings WHERE key = 'notifications_enabled'");
+    if (!notifEnabled.rows.length || notifEnabled.rows[0].value === 'true') {
+      const existing = await pool.query('SELECT id FROM admin_notifications WHERE type = $1 AND order_id = $2', ['new_order', parseInt(req.params.id)]);
+      if (existing.rows.length === 0) {
+        const o = order.rows[0];
+        const msg = `${o.customer_username} ordered ${o.panel_name} (${o.duration}) - $${o.final_price} via ${o.payment_method}`;
+        await pool.query(
+          'INSERT INTO admin_notifications (type, title, message, order_id) VALUES ($1, $2, $3, $4)',
+          ['new_order', `New Order #${o.id}`, msg, o.id]
+        );
+        sendPushToAdmins(`New Order #${o.id}`, msg, '/admin/orders').catch(() => {});
+      }
+    }
+
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -214,7 +247,9 @@ router.post('/order/:id/proof', authMiddleware, proofUpload.single('proof'), asy
       const oldPath = path.join(uploadsDir, oldProof);
       if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
     }
-    await pool.query('UPDATE orders SET payment_proof_image = $1, updated_at = NOW() WHERE id = $2', [req.file.filename, req.params.id]);
+    const filePath = path.join(uploadsDir, req.file.filename);
+    const fileData = fs.readFileSync(filePath);
+    await pool.query('UPDATE orders SET payment_proof_image = $1, payment_proof_data = $2, payment_proof_mime = $3, updated_at = NOW() WHERE id = $4', [req.file.filename, fileData, req.file.mimetype, req.params.id]);
     res.json({ filename: req.file.filename });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -245,6 +280,50 @@ router.get('/download/:orderId/:fileId', (req, res, next) => {
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on server' });
 
     res.download(filePath, file.originalName);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/panel-files', async (req, res) => {
+  try {
+    const cols = await pool.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'panel_files'
+    `);
+    const names = cols.rows.map(r => r.column_name);
+    const safe = (col, alias) => names.includes(col) ? `${col} AS ${alias}` : `'' AS ${alias}`;
+    const result = await pool.query(`
+      SELECT
+        id, title,
+        COALESCE(description, '') AS description,
+        COALESCE(version, '1.0') AS version,
+        COALESCE(file_path, '') AS file_path,
+        COALESCE(thumbnail, '') AS thumbnail,
+        COALESCE(file_size, '') AS file_size,
+        ${safe('update_date', 'update_date')},
+        created_at
+      FROM panel_files
+      ORDER BY created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/panel-files/:id/download', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM panel_files WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'File not found' });
+    const f = result.rows[0];
+    const filePath = path.join(uploadsDir, f.file_path);
+    if (fs.existsSync(filePath)) {
+      return res.download(filePath, f.original_filename || f.file_path);
+    }
+    if (f.file_data) {
+      const downloadName = f.original_filename || f.file_path;
+      res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+      res.setHeader('Content-Type', f.file_mime || 'application/octet-stream');
+      return res.send(f.file_data);
+    }
+    res.status(404).json({ error: 'File not found on server' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
