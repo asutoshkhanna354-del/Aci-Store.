@@ -9,6 +9,14 @@ const fs = require('fs');
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+// Branding uploads (logo, favicon, banner)
+const brandingStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => cb(null, `brand_${req.body.type || 'file'}_${Date.now()}${path.extname(file.originalname)}`)
+});
+const brandingUpload = multer({ storage: brandingStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+
+// Panel media uploads (photos + videos)
 const mediaStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
@@ -26,16 +34,10 @@ const mediaUpload = multer({
   }
 });
 
-const brandingStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => cb(null, `brand_${req.body.type || 'file'}_${Date.now()}${path.extname(file.originalname)}`)
-});
-const brandingUpload = multer({ storage: brandingStorage, limits: { fileSize: 5 * 1024 * 1024 } });
-
 router.use(authMiddleware);
 router.use(adminMiddleware);
 
-// ── Settings ────────────────────────────────────────────────────────────────
+// ── Settings ──────────────────────────────────────────────────────────────────
 router.get('/settings', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM store_settings LIMIT 1');
@@ -78,7 +80,7 @@ router.post('/upload-branding', brandingUpload.single('file'), async (req, res) 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Panels ───────────────────────────────────────────────────────────────────
+// ── Panels ────────────────────────────────────────────────────────────────────
 router.get('/panels', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM panels ORDER BY created_at DESC');
@@ -115,7 +117,7 @@ router.delete('/panels/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Panel Files ───────────────────────────────────────────────────────────────
+// ── Panel Files (JSON body — no file upload here) ─────────────────────────────
 router.get('/panel-files', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM panel_files ORDER BY created_at DESC');
@@ -128,6 +130,16 @@ router.post('/panel-files', async (req, res) => {
     const { title, description, version, file_size, update_date, download_url, thumbnail_url } = req.body;
     if (!title) return res.status(400).json({ error: 'Title required' });
     if (!download_url) return res.status(400).json({ error: 'Download URL required' });
+    const colsQ = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name='panel_files'`);
+    const cols = colsQ.rows.map(r => r.column_name);
+    if (cols.includes('video_url')) {
+      const { video_url } = req.body;
+      const result = await pool.query(
+        'INSERT INTO panel_files (title,description,version,file_size,update_date,thumbnail,file_path,original_filename,video_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+        [title, description || '', version || '1.0', file_size || '', update_date || new Date().toISOString().split('T')[0], thumbnail_url || '', download_url, '', video_url || '']
+      );
+      return res.json(result.rows[0]);
+    }
     const result = await pool.query(
       'INSERT INTO panel_files (title,description,version,file_size,update_date,thumbnail,file_path,original_filename) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
       [title, description || '', version || '1.0', file_size || '', update_date || new Date().toISOString().split('T')[0], thumbnail_url || '', download_url, '']
@@ -138,10 +150,19 @@ router.post('/panel-files', async (req, res) => {
 
 router.put('/panel-files/:id', async (req, res) => {
   try {
-    const { title, description, version, file_size, update_date, download_url, thumbnail_url } = req.body;
+    const { title, description, version, file_size, update_date, download_url, thumbnail_url, video_url } = req.body;
     const existing = await pool.query('SELECT * FROM panel_files WHERE id=$1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     const row = existing.rows[0];
+    const colsQ = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name='panel_files'`);
+    const cols = colsQ.rows.map(r => r.column_name);
+    if (cols.includes('video_url')) {
+      const result = await pool.query(
+        'UPDATE panel_files SET title=$1,description=$2,version=$3,file_size=$4,update_date=$5,thumbnail=$6,file_path=$7,video_url=$8 WHERE id=$9 RETURNING *',
+        [title ?? row.title, description ?? row.description, version || row.version, file_size ?? row.file_size, update_date || row.update_date, thumbnail_url ?? row.thumbnail, download_url || row.file_path, video_url ?? row.video_url ?? '', req.params.id]
+      );
+      return res.json(result.rows[0]);
+    }
     const result = await pool.query(
       'UPDATE panel_files SET title=$1,description=$2,version=$3,file_size=$4,update_date=$5,thumbnail=$6,file_path=$7 WHERE id=$8 RETURNING *',
       [title ?? row.title, description ?? row.description, version || row.version, file_size ?? row.file_size, update_date || row.update_date, thumbnail_url ?? row.thumbnail, download_url || row.file_path, req.params.id]
@@ -157,7 +178,7 @@ router.delete('/panel-files/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Panel Media (photos + video) ─────────────────────────────────────────────
+// ── Panel Media (new — photos + video gallery) ────────────────────────────────
 router.get('/panel-files/:id/media', async (req, res) => {
   try {
     const result = await pool.query(
@@ -179,7 +200,7 @@ router.post('/panel-files/:id/media', mediaUpload.array('files', 20), async (req
       const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
       const filePath = `/uploads/${file.filename}`;
       const r = await pool.query(
-        'INSERT INTO panel_media (panel_file_id, media_type, file_path, display_order) VALUES ($1,$2,$3,$4) RETURNING *',
+        'INSERT INTO panel_media (panel_file_id,media_type,file_path,display_order) VALUES ($1,$2,$3,$4) RETURNING *',
         [panelFileId, mediaType, filePath, orderStart++]
       );
       inserted.push(r.rows[0]);
@@ -200,7 +221,7 @@ router.delete('/panel-media/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Sections ─────────────────────────────────────────────────────────────────
+// ── Sections ──────────────────────────────────────────────────────────────────
 router.get('/sections', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM sections ORDER BY name');
