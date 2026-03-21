@@ -204,21 +204,19 @@ CREATE TABLE IF NOT EXISTS customer_key_pool (
 
 CREATE TABLE IF NOT EXISTS panel_files (
   id SERIAL PRIMARY KEY,
-  panel_id INT REFERENCES panels(id) ON DELETE CASCADE,
   title VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
   version VARCHAR(50) DEFAULT '1.0',
-  file_path VARCHAR(500) NOT NULL,
+  file_path TEXT NOT NULL,
   file_size VARCHAR(50) DEFAULT '',
-  thumbnail VARCHAR(500) DEFAULT '',
+  thumbnail TEXT DEFAULT '',
+  original_filename VARCHAR(500) DEFAULT '',
+  update_date VARCHAR(50) DEFAULT '',
   download_count INT DEFAULT 0,
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT NOW()
 );
-ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS file_data BYTEA;
-ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS file_mime VARCHAR(100);
-ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS thumb_data BYTEA;
-ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS thumb_mime VARCHAR(100);
+-- For existing tables: add missing columns if upgrading from older schema
 ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS original_filename VARCHAR(500) DEFAULT '';
 ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS update_date VARCHAR(50) DEFAULT '';
 
