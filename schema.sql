@@ -50,6 +50,7 @@ ALTER TABLE panels ADD COLUMN IF NOT EXISTS reseller_price_7day DECIMAL(10,2) DE
 ALTER TABLE panels ADD COLUMN IF NOT EXISTS reseller_price_30day DECIMAL(10,2) DEFAULT 0;
 ALTER TABLE panels ADD COLUMN IF NOT EXISTS reseller_price_60day DECIMAL(10,2) DEFAULT 0;
 ALTER TABLE panels ADD COLUMN IF NOT EXISTS custom_prices JSONB DEFAULT '{}';
+ALTER TABLE panels ADD COLUMN IF NOT EXISTS hidden_durations JSONB DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS promo_codes (
   id SERIAL PRIMARY KEY,
@@ -88,6 +89,8 @@ CREATE TABLE IF NOT EXISTS orders (
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_files TEXT DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_image TEXT DEFAULT '';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_data BYTEA;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_mime VARCHAR(100);
 
 INSERT INTO settings (key, value) VALUES ('store_name', 'FF Panel') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('upi_id', 'yourupi@bank') ON CONFLICT (key) DO NOTHING;
@@ -104,7 +107,8 @@ INSERT INTO settings (key, value) VALUES ('paypal_id', '') ON CONFLICT (key) DO 
 INSERT INTO settings (key, value) VALUES ('payment_method_paypal', 'false') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('bkash_number', '') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('nagad_number', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('payment_method_bd', 'false') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings (key, value) VALUES ('payment_method_bkash', 'false') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings (key, value) VALUES ('payment_method_nagad', 'false') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('particle_effect', 'none') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('banner_data', '') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('telegram_reseller_link', '') ON CONFLICT (key) DO NOTHING;
@@ -185,6 +189,8 @@ ALTER TABLE reseller_key_pool ADD COLUMN IF NOT EXISTS panel_id INT REFERENCES p
 ALTER TABLE reseller_key_orders ADD COLUMN IF NOT EXISTS panel_id INT REFERENCES panels(id) ON DELETE SET NULL;
 
 ALTER TABLE panel_images ADD COLUMN IF NOT EXISTS media_type VARCHAR(10) DEFAULT 'image';
+ALTER TABLE panel_images ADD COLUMN IF NOT EXISTS file_data BYTEA;
+ALTER TABLE panel_images ADD COLUMN IF NOT EXISTS mime_type VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS customer_key_pool (
   id SERIAL PRIMARY KEY,
@@ -196,6 +202,26 @@ CREATE TABLE IF NOT EXISTS customer_key_pool (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS panel_files (
+  id SERIAL PRIMARY KEY,
+  panel_id INT REFERENCES panels(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  version VARCHAR(50) DEFAULT '1.0',
+  file_path VARCHAR(500) NOT NULL,
+  file_size VARCHAR(50) DEFAULT '',
+  thumbnail VARCHAR(500) DEFAULT '',
+  download_count INT DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS file_data BYTEA;
+ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS file_mime VARCHAR(100);
+ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS thumb_data BYTEA;
+ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS thumb_mime VARCHAR(100);
+ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS original_filename VARCHAR(500) DEFAULT '';
+ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS update_date VARCHAR(50) DEFAULT '';
+
 INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$10 Balance', 10, 10, 1) ON CONFLICT (amount_usd) DO NOTHING;
 INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$25 Balance', 25, 25, 2) ON CONFLICT (amount_usd) DO NOTHING;
 INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$50 Balance', 50, 50, 3) ON CONFLICT (amount_usd) DO NOTHING;
@@ -204,8 +230,34 @@ INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES (
 INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$500 Balance', 500, 500, 6) ON CONFLICT (amount_usd) DO NOTHING;
 INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$1000 Balance', 1000, 1000, 7) ON CONFLICT (amount_usd) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS admin_notifications (
+  id SERIAL PRIMARY KEY,
+  type VARCHAR(50) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  message TEXT DEFAULT '',
+  order_id INT,
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id SERIAL PRIMARY KEY,
+  user_id INT REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL,
+  keys_p256dh TEXT NOT NULL,
+  keys_auth TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(endpoint)
+);
+
+INSERT INTO settings (key, value) VALUES ('notifications_enabled', 'true') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings (key, value) VALUES ('vapid_public_key', 'BD0fVGhy6WbLCo4L0oWXSctE9EZgnAIoLQv0JVA7qtm1FBnm4adIQl8w54V5I9KJvCL7dYGvkLAmUwIt0zVT6ls') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings (key, value) VALUES ('vapid_private_key', 'UxMa0lUyX961FDw5YB-PSFemrv5dTUc8ciUHYc2jhmE') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('reseller_key_price_1day', '3') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('reseller_key_price_3day', '7') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('reseller_key_price_7day', '12') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('reseller_key_price_14day', '20') ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('reseller_key_price_30day', '35') ON CONFLICT (key) DO NOTHING;
+
+UPDATE settings SET value = (SELECT value FROM settings WHERE key = 'payment_method_bd') WHERE key IN ('payment_method_bkash', 'payment_method_nagad') AND EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_bd' AND value = 'true') AND value = 'false';
+DELETE FROM settings WHERE key = 'payment_method_bd';
