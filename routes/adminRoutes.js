@@ -160,7 +160,7 @@ router.delete('/panels/:id', async (req, res) => {
 
 router.get('/panels/:id/images', async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const result = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -180,12 +180,9 @@ router.post('/panels/:id/images', mediaUpload.array('images', 20), async (req, r
     let sortOrder = maxOrder.rows[0].max_order + 1;
     const images = [];
     for (const file of req.files) {
-      const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
-      const filePath = path.join(uploadsDir, file.filename);
-      const fileData = fs.readFileSync(filePath);
       const result = await pool.query(
-        'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type, file_data, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, panel_id, filename, original_name, sort_order, media_type, created_at',
-        [panelId, file.filename, file.originalname, sortOrder++, mediaType, fileData, file.mimetype]
+        'INSERT INTO panel_images (panel_id, filename, original_name, sort_order) VALUES ($1, $2, $3, $4) RETURNING id, panel_id, filename, original_name, sort_order, created_at',
+        [panelId, file.filename, file.originalname, sortOrder++]
       );
       images.push(result.rows[0]);
     }
