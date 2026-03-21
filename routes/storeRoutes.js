@@ -291,22 +291,13 @@ router.get('/panel-files', async (req, res) => {
 });
 
 router.get('/panel-files/:id/download', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM panel_files WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'File not found' });
-    const f = result.rows[0];
-    const filePath = path.join(uploadsDir, f.file_path);
-    if (fs.existsSync(filePath)) {
-      return res.download(filePath, f.original_filename || f.file_path);
-    }
-    if (f.file_data) {
-      const downloadName = f.original_filename || f.file_path;
-      res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-      res.setHeader('Content-Type', f.file_mime || 'application/octet-stream');
-      return res.send(f.file_data);
-    }
-    res.status(404).json({ error: 'File not found on server' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+    try {
+      const result = await pool.query('SELECT id, file_path FROM panel_files WHERE id = $1', [req.params.id]);
+      if (result.rows.length === 0) return res.status(404).json({ error: 'File not found' });
+      const url = result.rows[0].file_path;
+      if (!url) return res.status(404).json({ error: 'No download URL configured' });
+      res.redirect(url);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
 module.exports = router;
