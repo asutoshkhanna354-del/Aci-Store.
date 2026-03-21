@@ -63,7 +63,7 @@ router.get('/panels', async (req, res) => {
     const panelIds = result.rows.map(p => p.id);
     let imagesMap = {};
     if (panelIds.length > 0) {
-      const imgResult = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, created_at FROM panel_images WHERE panel_id = ANY($1) ORDER BY sort_order, id', [panelIds]);
+      const imgResult = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, created_at FROM panel_images WHERE panel_id = ANY($1) ORDER BY sort_order, id', [panelIds]);
       imgResult.rows.forEach(img => {
         if (!imagesMap[img.panel_id]) imagesMap[img.panel_id] = [];
         imagesMap[img.panel_id].push(img);
@@ -89,7 +89,7 @@ router.get('/panels/:id', async (req, res) => {
   try {
     const result = await pool.query(`SELECT p.*, s.name as section_name FROM panels p LEFT JOIN sections s ON p.section_id = s.id WHERE p.id = $1`, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Panel not found' });
-    const images = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const images = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
     const stockResult = await pool.query(
       "SELECT duration_days, COUNT(*) as count FROM customer_key_pool WHERE panel_id = $1 AND status = 'available' GROUP BY duration_days",
       [req.params.id]
