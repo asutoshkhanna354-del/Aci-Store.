@@ -664,68 +664,47 @@ router.get('/panel-files', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/panel-files', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), async (req, res) => {
-  try {
-    const { title, description, version, file_size, update_date } = req.body;
-    if (!title) return res.status(400).json({ error: 'Title required' });
-    if (!req.files?.file?.[0]) return res.status(400).json({ error: 'File required' });
-    const file = req.files.file[0];
-    const thumb = req.files.thumbnail?.[0];
-    const fileDataBuf = fs.readFileSync(path.join(uploadsDir, file.filename));
-    const thumbDataBuf = thumb ? fs.readFileSync(path.join(uploadsDir, thumb.filename)) : null;
-    const result = await pool.query(
-      'INSERT INTO panel_files (title, description, version, file_size, update_date, thumbnail, file_path, original_filename, file_data, file_mime, thumb_data, thumb_mime) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, title, description, version, file_size, update_date, thumbnail, file_path, original_filename, created_at',
-      [title, description || '', version || '1.0', file_size || '', update_date || new Date().toISOString().split('T')[0], thumb ? thumb.filename : '', file.filename, file.originalname, fileDataBuf, file.mimetype, thumbDataBuf, thumb ? thumb.mimetype : null]
-    );
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+router.post('/panel-files', async (req, res) => {
+    try {
+      const { title, description, version, file_size, update_date, file_url, thumbnail_url } = req.body;
+      if (!title) return res.status(400).json({ error: 'Title required' });
+      if (!file_url) return res.status(400).json({ error: 'File URL required' });
+      const result = await pool.query(
+        'INSERT INTO panel_files (title, description, version, file_size, update_date, thumbnail, file_path, original_filename) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, title, description, version, file_size, update_date, thumbnail, file_path, original_filename, created_at',
+        [title, description || '', version || '1.0', file_size || '', update_date || new Date().toISOString().split('T')[0], thumbnail_url || '', file_url, title]
+      );
+      res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
-router.put('/panel-files/:id', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), async (req, res) => {
-  try {
-    const { title, description, version, file_size, update_date } = req.body;
-    const existing = await pool.query('SELECT * FROM panel_files WHERE id = $1', [req.params.id]);
-    if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    const file = req.files?.file?.[0];
-    const thumb = req.files?.thumbnail?.[0];
-    let filePath = existing.rows[0].file_path;
-    let origName = existing.rows[0].original_filename;
-    let thumbName = existing.rows[0].thumbnail;
-    if (file) { filePath = file.filename; origName = file.originalname; }
-    if (thumb) { thumbName = thumb.filename; }
-    const fileDataBuf = file ? fs.readFileSync(path.join(uploadsDir, file.filename)) : null;
-    const thumbDataBuf = thumb ? fs.readFileSync(path.join(uploadsDir, thumb.filename)) : null;
-    let query, params;
-    if (file && thumb) {
-      query = 'UPDATE panel_files SET title=COALESCE($1,title), description=COALESCE($2,description), version=COALESCE($3,version), file_size=COALESCE($4,file_size), update_date=COALESCE($5,update_date), thumbnail=$6, file_path=$7, original_filename=$8, file_data=$10, file_mime=$11, thumb_data=$12, thumb_mime=$13 WHERE id=$9';
-      params = [title, description, version, file_size, update_date, thumbName, filePath, origName, req.params.id, fileDataBuf, file.mimetype, thumbDataBuf, thumb.mimetype];
-    } else if (file) {
-      query = 'UPDATE panel_files SET title=COALESCE($1,title), description=COALESCE($2,description), version=COALESCE($3,version), file_size=COALESCE($4,file_size), update_date=COALESCE($5,update_date), thumbnail=$6, file_path=$7, original_filename=$8, file_data=$10, file_mime=$11 WHERE id=$9';
-      params = [title, description, version, file_size, update_date, thumbName, filePath, origName, req.params.id, fileDataBuf, file.mimetype];
-    } else if (thumb) {
-      query = 'UPDATE panel_files SET title=COALESCE($1,title), description=COALESCE($2,description), version=COALESCE($3,version), file_size=COALESCE($4,file_size), update_date=COALESCE($5,update_date), thumbnail=$6, file_path=$7, original_filename=$8, thumb_data=$10, thumb_mime=$11 WHERE id=$9';
-      params = [title, description, version, file_size, update_date, thumbName, filePath, origName, req.params.id, thumbDataBuf, thumb.mimetype];
-    } else {
-      query = 'UPDATE panel_files SET title=COALESCE($1,title), description=COALESCE($2,description), version=COALESCE($3,version), file_size=COALESCE($4,file_size), update_date=COALESCE($5,update_date), thumbnail=$6, file_path=$7, original_filename=$8 WHERE id=$9';
-      params = [title, description, version, file_size, update_date, thumbName, filePath, origName, req.params.id];
-    }
-    await pool.query(query, params);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+  router.put('/panel-files/:id', async (req, res) => {
+    try {
+      const { title, description, version, file_size, update_date, file_url, thumbnail_url } = req.body;
+      const existing = await pool.query('SELECT * FROM panel_files WHERE id = $1', [req.params.id]);
+      if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+      await pool.query(
+        `UPDATE panel_files SET
+          title = COALESCE($1, title),
+          description = COALESCE($2, description),
+          version = COALESCE($3, version),
+          file_size = COALESCE($4, file_size),
+          update_date = COALESCE($5, update_date),
+          thumbnail = COALESCE($6, thumbnail),
+          file_path = COALESCE($7, file_path)
+        WHERE id = $8`,
+        [title||null, description||null, version||null, file_size||null, update_date||null, thumbnail_url||null, file_url||null, req.params.id]
+      );
+      const updated = await pool.query('SELECT id, title, description, version, file_size, update_date, thumbnail, file_path, original_filename, created_at FROM panel_files WHERE id=$1', [req.params.id]);
+      res.json(updated.rows[0]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
-router.delete('/panel-files/:id', async (req, res) => {
-  try {
-    const existing = await pool.query('SELECT * FROM panel_files WHERE id = $1', [req.params.id]);
-    if (existing.rows.length > 0) {
-      const f = existing.rows[0];
-      if (f.file_path) { const fp = path.join(uploadsDir, f.file_path); if (fs.existsSync(fp)) fs.unlinkSync(fp); }
-      if (f.thumbnail) { const tp = path.join(uploadsDir, f.thumbnail); if (fs.existsSync(tp)) fs.unlinkSync(tp); }
-    }
-    await pool.query('DELETE FROM panel_files WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+  router.delete('/panel-files/:id', async (req, res) => {
+    try {
+      await pool.query('DELETE FROM panel_files WHERE id = $1', [req.params.id]);
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
 router.delete('/reseller-key-pool-bulk', async (req, res) => {
   try {
