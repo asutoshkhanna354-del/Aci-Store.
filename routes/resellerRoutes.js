@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../db');
 const { generateResellerToken, resellerMiddleware } = require('../auth');
 
+const { sendPushToAdmins } = require('../pushNotify');
 const router = express.Router();
 
 router.post('/login', async (req, res) => {
@@ -61,6 +62,17 @@ router.post('/topup', resellerMiddleware, async (req, res) => {
       'INSERT INTO reseller_topups (reseller_id, package_id, amount_usd, price_usd, payment_method, utr_number, status) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
       [req.reseller.id, package_id, p.amount_usd, p.price_usd, payment_method, utr_number, 'pending_verification']
     );
+
+    const notifEnabled = await pool.query("SELECT value FROM settings WHERE key = 'notifications_enabled'");
+    if (!notifEnabled.rows.length || notifEnabled.rows[0].value === 'true') {
+      const topupMsg = `Reseller ${req.reseller.username} requested $${p.amount_usd} topup via ${payment_method}`;
+      await pool.query(
+        'INSERT INTO admin_notifications (type, title, message) VALUES ($1, $2, $3)',
+        ['reseller_topup', `Reseller Topup #${result.rows[0].id}`, topupMsg]
+      );
+      sendPushToAdmins(`Reseller Topup #${result.rows[0].id}`, topupMsg, '/admin/reseller-orders').catch(() => {});
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -220,7 +232,7 @@ router.get('/key-orders', resellerMiddleware, async (req, res) => {
 
 router.get('/payment-info', resellerMiddleware, async (req, res) => {
   try {
-    const result = await pool.query("SELECT key, value FROM settings WHERE key IN ('upi_id','payment_method_upi','payment_method_crypto','crypto_btc_address','crypto_usdt_trc20_address','crypto_usdt_erc20_address','crypto_usdt_bep20_address','payment_method_paypal','paypal_id','payment_method_bd','bkash_number','nagad_number')");
+    const result = await pool.query("SELECT key, value FROM settings WHERE key IN ('upi_id','payment_method_upi','payment_method_crypto','crypto_btc_address','crypto_usdt_trc20_address','crypto_usdt_erc20_address','crypto_usdt_bep20_address','payment_method_paypal','paypal_id','payment_method_bkash','payment_method_nagad','bkash_number','nagad_number')");
     const info = {};
     result.rows.forEach(r => { info[r.key] = r.value; });
     res.json(info);
