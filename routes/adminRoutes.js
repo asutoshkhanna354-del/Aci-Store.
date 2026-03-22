@@ -261,7 +261,15 @@ router.get('/orders', async (req, res) => {
       params = [status];
     }
     const result = await pool.query(query, params);
-    res.json(result.rows);
+    const rows = result.rows.map(r => {
+        let proof_data_url = null;
+        if (r.payment_proof_data) {
+          const b64 = Buffer.isBuffer(r.payment_proof_data) ? r.payment_proof_data.toString() : String(r.payment_proof_data);
+          proof_data_url = `data:${r.payment_proof_mime || 'image/jpeg'};base64,${b64}`;
+        }
+        return { ...r, proof_data_url, payment_proof_data: undefined };
+      });
+      res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
