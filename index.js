@@ -49,16 +49,56 @@ app.get('/{*splat}', (req, res) => {
   }
 });
 
-async function start() {
+async function runSchema() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  await pool.query(schema);
+  // Split on semicolons but keep DO $$ ... END $$; blocks intact
+  const statements = [];
+  let current = '';
+  let inDollarQuote = false;
+  for (let i = 0; i < schema.length; i++) {
+    current += schema[i];
+    if (schema.slice(i, i + 2) === '$$') {
+      inDollarQuote = !inDollarQuote;
+    }
+    if (schema[i] === ';' && !inDollarQuote) {
+      const stmt = current.trim();
+      if (stmt && stmt !== ';') statements.push(stmt);
+      current = '';
+    }
+  }
+  if (current.trim()) statements.push(current.trim());
 
-  const seed = require('./seed');
+  for (const stmt of statements) {
+    try {
+      await pool.query(stmt);
+    } catch (err) {
+      // Log but don't crash — migration errors shouldn't kill the server
+      console.warn('Schema stmt warning (non-fatal):', err.message);
+    }
+  }
+}
 
-  const PORT = 5000;
+async function start() {
+  try {
+    await runSchema();
+    console.log('Schema migration complete');
+  } catch (err) {
+    console.warn('Schema migration warning:', err.message);
+  }
+
+  try {
+    require('./seed');
+  } catch (err) {
+    console.warn('Seed warning:', err.message);
+  }
+
+  const PORT = process.env.PORT || 5000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
 
-start().catch(console.error);
+start().catch(err => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});
