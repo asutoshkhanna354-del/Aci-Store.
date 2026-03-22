@@ -27,7 +27,8 @@ const mediaFilter = (req, file, cb) => {
 };
 
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
-const mediaUpload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 }, fileFilter: mediaFilter });
+// Panel images stored in DB (memoryStorage) — no Render disk dependency
+  const mediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 }, fileFilter: mediaFilter });
 
 // Memory-only storage for branding — never writes to disk, survives Render redeploys
 const brandingUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -167,43 +168,42 @@ router.delete('/panels/:id', async (req, res) => {
 });
 
 router.get('/panels/:id/images', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+    try {
+      const result = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, file_data, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
+      const rows = result.rows.map(r => ({ ...r, data_url: r.file_data ? r.file_data.toString() : null, file_data: undefined }));
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });;
 
-router.post('/panels/:id/images', mediaUpload.array('images', 20), async (req, res) => {
-  try {
-    const panelId = req.params.id;
-    const panelCheck = await pool.query('SELECT id FROM panels WHERE id = $1', [panelId]);
-    if (panelCheck.rows.length === 0) {
-      for (const file of (req.files || [])) {
-        const fp = path.join(uploadsDir, file.filename);
-        if (fs.existsSync(fp)) fs.unlinkSync(fp);
+router.post('/panels/:id/images', async (req, res) => {
+    try {
+      const panelId = req.params.id;
+      const panelCheck = await pool.query('SELECT id FROM panels WHERE id = $1', [panelId]);
+      if (panelCheck.rows.length === 0) return res.status(404).json({ error: 'Panel not found' });
+      const maxOrder = await pool.query('SELECT COALESCE(MAX(sort_order), 0) as max_order FROM panel_images WHERE panel_id = $1', [panelId]);
+      let sortOrder = maxOrder.rows[0].max_order + 1;
+      const uploadedImages = req.body?.images || [];
+      const saved = [];
+      for (const img of uploadedImages) {
+        const { data_url, filename, media_type } = img;
+        if (!data_url) continue;
+        const mime = data_url.split(';')[0].replace('data:', '');
+        const isVideo = mime.startsWith('video/');
+        const result = await pool.query(
+          'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type, file_data, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, panel_id, filename, original_name, sort_order, media_type, created_at',
+          [panelId, filename || 'image', filename || 'image', sortOrder++, media_type || (isVideo ? 'video' : 'image'), Buffer.from(data_url), mime]
+        );
+        saved.push({ ...result.rows[0], data_url });
       }
-      return res.status(404).json({ error: 'Panel not found' });
-    }
-    const maxOrder = await pool.query('SELECT COALESCE(MAX(sort_order), 0) as max_order FROM panel_images WHERE panel_id = $1', [panelId]);
-    let sortOrder = maxOrder.rows[0].max_order + 1;
-    const images = [];
-    for (const file of req.files) {
-      const result = await pool.query(
-        'INSERT INTO panel_images (panel_id, filename, original_name, sort_order) VALUES ($1, $2, $3, $4) RETURNING id, panel_id, filename, original_name, sort_order, created_at',
-        [panelId, file.filename, file.originalname, sortOrder++]
-      );
-      images.push(result.rows[0]);
-    }
-    res.json(images);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+      res.json(saved);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
 router.delete('/panels/:panelId/images/:imageId', async (req, res) => {
   try {
     const result = await pool.query('SELECT filename FROM panel_images WHERE id = $1 AND panel_id = $2', [req.params.imageId, req.params.panelId]);
     if (result.rows.length > 0) {
-      const filePath = path.join(uploadsDir, result.rows[0].filename);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
       await pool.query('DELETE FROM panel_images WHERE id = $1', [req.params.imageId]);
     }
     res.json({ success: true });
@@ -338,7 +338,8 @@ router.post('/orders/:id/upload', upload.array('files', 10), async (req, res) =>
     let existingFiles = [];
     try { existingFiles = JSON.parse(order.rows[0].delivered_files || '[]'); } catch { existingFiles = []; }
 
-    const newFiles = req.files.map(f => ({
+    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+      const newFiles = (req.files || []).map(f => ({
       id: crypto.randomBytes(6).toString('hex'),
       filename: f.filename,
       originalName: f.originalname,
@@ -746,26 +747,35 @@ router.delete('/customer-key-pool-bulk', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/upload-branding', brandingUpload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const { type } = req.body;
-    if (!type) return res.status(400).json({ error: 'Type required' });
-    const key = `branding_${type}`;
+router.post('/upload-branding', async (req, res) => {
+    try {
+      const { type, data_url } = req.body || {};
+      if (!type || !data_url) return res.status(400).json({ error: 'type and data_url required' });
+      const key = `branding_${type}`;
+      const mime = data_url.split(';')[0].replace('data:', '');
+      const base64 = data_url.split(',')[1] || '';
+      async function upsertSetting(k, v) {
+        const r = await pool.query('UPDATE settings SET value = $2 WHERE key = $1', [k, v]);
+        if (r.rowCount === 0) await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2)', [k, v]);
+      }
+      await upsertSetting(`${key}_data`, base64);
+      await upsertSetting(`${key}_mime`, mime);
+      res.json({ success: true, type, data_url });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });;
 
-    async function upsertSetting(k, v) {
-      const r = await pool.query('UPDATE settings SET value = $2 WHERE key = $1', [k, v]);
-      if (r.rowCount === 0) await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2)', [k, v]);
-    }
+// Serve panel image/video from DB — no disk dependency
+  router.get('/panels/:panelId/images/:imageId/data', async (req, res) => {
+    try {
+      const result = await pool.query('SELECT file_data, mime_type FROM panel_images WHERE id = $1 AND panel_id = $2', [req.params.imageId, req.params.panelId]);
+      if (!result.rows[0]?.file_data) return res.status(404).json({ error: 'Image not found' });
+      res.setHeader('Content-Type', result.rows[0].mime_type || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(result.rows[0].file_data);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
-    // Store base64 in database — no disk write needed, survives Render redeploys
-    await upsertSetting(`${key}_data`, req.file.buffer.toString('base64'));
-    await upsertSetting(`${key}_mime`, req.file.mimetype);
-    res.json({ success: true, type });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Clear branding from database
+  // Clear branding from database
   router.delete('/branding/:type', async (req, res) => {
     try {
       const { type } = req.params;
@@ -779,7 +789,7 @@ router.post('/upload-branding', brandingUpload.single('file'), async (req, res) 
     try {
       const result = await pool.query('SELECT payment_proof_data, payment_proof_mime FROM orders WHERE id = $1', [req.params.id]);
       if (!result.rows[0]?.payment_proof_data) return res.status(404).json({ error: 'No proof found' });
-      const buffer = Buffer.from(result.rows[0].payment_proof_data, 'base64');
+      const buffer = Buffer.from(Buffer.isBuffer(result.rows[0].payment_proof_data) ? result.rows[0].payment_proof_data.toString() : result.rows[0].payment_proof_data, 'base64');
       res.setHeader('Content-Type', result.rows[0].payment_proof_mime || 'image/jpeg');
       res.setHeader('Cache-Control', 'no-store');
       res.send(buffer);

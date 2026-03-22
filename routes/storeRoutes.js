@@ -10,25 +10,6 @@ const { sendPushToAdmins } = require('../pushNotify');
 const router = express.Router();
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 
-const proofStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `proof_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
-  }
-});
-const proofUpload = multer({
-  storage: proofStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Only image files allowed'));
-  }
-});
-
 router.get('/settings', async (req, res) => {
   try {
     const result = await pool.query('SELECT key, value FROM settings');
@@ -49,6 +30,17 @@ router.get('/settings', async (req, res) => {
       res.setHeader('Content-Type', mimeResult.rows[0]?.value || 'image/jpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.send(buffer);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Public endpoint to serve panel image/video from DB
+  router.get('/panel-images/:imageId', async (req, res) => {
+    try {
+      const result = await pool.query('SELECT file_data, mime_type FROM panel_images WHERE id = $1', [req.params.imageId]);
+      if (!result.rows[0]?.file_data) return res.status(404).json({ error: 'Image not found' });
+      res.setHeader('Content-Type', result.rows[0].mime_type || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(result.rows[0].file_data);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -77,10 +69,10 @@ router.get('/panels', async (req, res) => {
     const panelIds = result.rows.map(p => p.id);
     let imagesMap = {};
     if (panelIds.length > 0) {
-      const imgResult = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, created_at FROM panel_images WHERE panel_id = ANY($1) ORDER BY sort_order, id', [panelIds]);
+      const imgResult = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, file_data, created_at FROM panel_images WHERE panel_id = ANY($1) ORDER BY sort_order, id', [panelIds]);
       imgResult.rows.forEach(img => {
         if (!imagesMap[img.panel_id]) imagesMap[img.panel_id] = [];
-        imagesMap[img.panel_id].push(img);
+        imagesMap[img.panel_id].push({ ...img, data_url: img.file_data ? img.file_data.toString() : null, file_data: undefined });
       });
     }
     const panelIds2 = result.rows.map(p => p.id);
@@ -103,14 +95,15 @@ router.get('/panels/:id', async (req, res) => {
   try {
     const result = await pool.query(`SELECT p.*, s.name as section_name FROM panels p LEFT JOIN sections s ON p.section_id = s.id WHERE p.id = $1`, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Panel not found' });
-    const images = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
+    const images = await pool.query('SELECT id, panel_id, filename, original_name, sort_order, media_type, file_data, created_at FROM panel_images WHERE panel_id = $1 ORDER BY sort_order, id', [req.params.id]);
     const stockResult = await pool.query(
       "SELECT duration_days, COUNT(*) as count FROM customer_key_pool WHERE panel_id = $1 AND status = 'available' GROUP BY duration_days",
       [req.params.id]
     );
     const stockMap = {};
     stockResult.rows.forEach(r => { stockMap[r.duration_days] = true; });
-    res.json({ ...result.rows[0], images: images.rows, stock_by_duration: stockMap });
+    const mappedImages = images.rows.map(r => ({ ...r, data_url: r.file_data ? r.file_data.toString() : null, file_data: undefined }));
+      res.json({ ...result.rows[0], images: mappedImages, stock_by_duration: stockMap });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -248,25 +241,18 @@ router.put('/order/:id/utr', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/order/:id/proof', authMiddleware, proofUpload.single('proof'), async (req, res) => {
-  try {
-    const order = await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
-    if (order.rows.length === 0) {
-      if (req.file) fs.unlinkSync(req.file.path);
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
-    const oldProof = order.rows[0].payment_proof_image;
-    if (oldProof) {
-      const oldPath = path.join(uploadsDir, oldProof);
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-    }
-    const filePath = path.join(uploadsDir, req.file.filename);
-    const fileData = fs.readFileSync(filePath);
-    await pool.query('UPDATE orders SET payment_proof_image = $1, payment_proof_data = $2, payment_proof_mime = $3, updated_at = NOW() WHERE id = $4', [req.file.filename, fileData, req.file.mimetype, req.params.id]);
-    res.json({ filename: req.file.filename });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+router.post('/order/:id/proof', authMiddleware, async (req, res) => {
+    try {
+      const { data_url } = req.body || {};
+      if (!data_url) return res.status(400).json({ error: 'No image provided' });
+      const order = await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+      if (order.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
+      const mime = data_url.split(';')[0].replace('data:', '');
+      const base64 = data_url.split(',')[1] || '';
+      await pool.query('UPDATE orders SET payment_proof_image = $1, payment_proof_data = $2, payment_proof_mime = $3, updated_at = NOW() WHERE id = $4', ['uploaded', base64, mime, req.params.id]);
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });;
 
 router.get('/my-orders', authMiddleware, async (req, res) => {
   try {
