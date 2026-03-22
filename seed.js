@@ -1,12 +1,7 @@
 const pool = require('./db');
 const bcrypt = require('bcryptjs');
-const fs = require('fs');
-const path = require('path');
 
 async function seed() {
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  await pool.query(schema);
-
   const hash = await bcrypt.hash('shariyan988', 10);
   const adminExists = await pool.query("SELECT id FROM users WHERE username = 'Shariyan1'");
   if (adminExists.rows.length === 0) {
@@ -77,4 +72,4 @@ async function seed() {
   console.log('Database seeded successfully');
 }
 
-seed().catch(console.error);
+seed().catch(err => console.warn('Seed warning (non-fatal):', err.message));

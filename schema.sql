@@ -92,27 +92,27 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_image TEXT DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_data BYTEA;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_mime VARCHAR(100);
 
-INSERT INTO settings (key, value) VALUES ('store_name', 'FF Panel') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('upi_id', 'yourupi@bank') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('store_description', 'Premium FF Panels for iOS & Android') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('announcement', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('telegram_support', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('payment_method_upi', 'true') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('payment_method_crypto', 'true') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('crypto_btc_address', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('crypto_usdt_trc20_address', 'TExampleUSDTAddressTRC20here') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('crypto_usdt_erc20_address', '0xExampleUSDTAddressERC20here') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('crypto_usdt_bep20_address', '0xExampleUSDTAddressBEP20here') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('paypal_id', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('payment_method_paypal', 'false') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('bkash_number', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('nagad_number', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('payment_method_bkash', 'false') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('payment_method_nagad', 'false') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('particle_effect', 'none') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('banner_data', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('telegram_reseller_link', '') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('whatsapp_support', '') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings (key, value) SELECT 'store_name', 'FF Panel' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'store_name');
+INSERT INTO settings (key, value) SELECT 'upi_id', 'yourupi@bank' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'upi_id');
+INSERT INTO settings (key, value) SELECT 'store_description', 'Premium FF Panels for iOS & Android' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'store_description');
+INSERT INTO settings (key, value) SELECT 'announcement', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'announcement');
+INSERT INTO settings (key, value) SELECT 'telegram_support', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'telegram_support');
+INSERT INTO settings (key, value) SELECT 'payment_method_upi', 'true' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_upi');
+INSERT INTO settings (key, value) SELECT 'payment_method_crypto', 'true' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_crypto');
+INSERT INTO settings (key, value) SELECT 'crypto_btc_address', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'crypto_btc_address');
+INSERT INTO settings (key, value) SELECT 'crypto_usdt_trc20_address', 'TExampleUSDTAddressTRC20here' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'crypto_usdt_trc20_address');
+INSERT INTO settings (key, value) SELECT 'crypto_usdt_erc20_address', '0xExampleUSDTAddressERC20here' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'crypto_usdt_erc20_address');
+INSERT INTO settings (key, value) SELECT 'crypto_usdt_bep20_address', '0xExampleUSDTAddressBEP20here' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'crypto_usdt_bep20_address');
+INSERT INTO settings (key, value) SELECT 'paypal_id', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'paypal_id');
+INSERT INTO settings (key, value) SELECT 'payment_method_paypal', 'false' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_paypal');
+INSERT INTO settings (key, value) SELECT 'bkash_number', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'bkash_number');
+INSERT INTO settings (key, value) SELECT 'nagad_number', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'nagad_number');
+INSERT INTO settings (key, value) SELECT 'payment_method_bkash', 'false' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_bkash');
+INSERT INTO settings (key, value) SELECT 'payment_method_nagad', 'false' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_nagad');
+INSERT INTO settings (key, value) SELECT 'particle_effect', 'none' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'particle_effect');
+INSERT INTO settings (key, value) SELECT 'banner_data', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'banner_data');
+INSERT INTO settings (key, value) SELECT 'telegram_reseller_link', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'telegram_reseller_link');
+INSERT INTO settings (key, value) SELECT 'whatsapp_support', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'whatsapp_support');
 
 CREATE TABLE IF NOT EXISTS panel_images (
   id SERIAL PRIMARY KEY,
@@ -231,13 +231,13 @@ CREATE TABLE IF NOT EXISTS panel_files (
 ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS original_filename VARCHAR(500) DEFAULT '';
 ALTER TABLE panel_files ADD COLUMN IF NOT EXISTS update_date VARCHAR(50) DEFAULT '';
 
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$10 Balance', 10, 10, 1) ON CONFLICT (amount_usd) DO NOTHING;
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$25 Balance', 25, 25, 2) ON CONFLICT (amount_usd) DO NOTHING;
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$50 Balance', 50, 50, 3) ON CONFLICT (amount_usd) DO NOTHING;
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$100 Balance', 100, 100, 4) ON CONFLICT (amount_usd) DO NOTHING;
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$200 Balance', 200, 200, 5) ON CONFLICT (amount_usd) DO NOTHING;
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$500 Balance', 500, 500, 6) ON CONFLICT (amount_usd) DO NOTHING;
-INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) VALUES ('$1000 Balance', 1000, 1000, 7) ON CONFLICT (amount_usd) DO NOTHING;
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$10 Balance', 10, 10, 1 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 10);
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$25 Balance', 25, 25, 2 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 25);
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$50 Balance', 50, 50, 3 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 50);
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$100 Balance', 100, 100, 4 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 100);
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$200 Balance', 200, 200, 5 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 200);
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$500 Balance', 500, 500, 6 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 500);
+INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '$1000 Balance', 1000, 1000, 7 WHERE NOT EXISTS (SELECT 1 FROM reseller_packages WHERE amount_usd = 1000);
 
 CREATE TABLE IF NOT EXISTS admin_notifications (
   id SERIAL PRIMARY KEY,
@@ -259,14 +259,14 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   UNIQUE(endpoint)
 );
 
-INSERT INTO settings (key, value) VALUES ('notifications_enabled', 'true') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('vapid_public_key', 'BD0fVGhy6WbLCo4L0oWXSctE9EZgnAIoLQv0JVA7qtm1FBnm4adIQl8w54V5I9KJvCL7dYGvkLAmUwIt0zVT6ls') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('vapid_private_key', 'UxMa0lUyX961FDw5YB-PSFemrv5dTUc8ciUHYc2jhmE') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('reseller_key_price_1day', '3') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('reseller_key_price_3day', '7') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('reseller_key_price_7day', '12') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('reseller_key_price_14day', '20') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value) VALUES ('reseller_key_price_30day', '35') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings (key, value) SELECT 'notifications_enabled', 'true' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'notifications_enabled');
+INSERT INTO settings (key, value) SELECT 'vapid_public_key', 'BD0fVGhy6WbLCo4L0oWXSctE9EZgnAIoLQv0JVA7qtm1FBnm4adIQl8w54V5I9KJvCL7dYGvkLAmUwIt0zVT6ls' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'vapid_public_key');
+INSERT INTO settings (key, value) SELECT 'vapid_private_key', 'UxMa0lUyX961FDw5YB-PSFemrv5dTUc8ciUHYc2jhmE' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'vapid_private_key');
+INSERT INTO settings (key, value) SELECT 'reseller_key_price_1day', '3' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'reseller_key_price_1day');
+INSERT INTO settings (key, value) SELECT 'reseller_key_price_3day', '7' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'reseller_key_price_3day');
+INSERT INTO settings (key, value) SELECT 'reseller_key_price_7day', '12' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'reseller_key_price_7day');
+INSERT INTO settings (key, value) SELECT 'reseller_key_price_14day', '20' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'reseller_key_price_14day');
+INSERT INTO settings (key, value) SELECT 'reseller_key_price_30day', '35' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'reseller_key_price_30day');
 
 UPDATE settings SET value = (SELECT value FROM settings WHERE key = 'payment_method_bd') WHERE key IN ('payment_method_bkash', 'payment_method_nagad') AND EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_bd' AND value = 'true') AND value = 'false';
 DELETE FROM settings WHERE key = 'payment_method_bd';
