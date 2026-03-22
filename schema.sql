@@ -145,12 +145,23 @@ CREATE TABLE IF NOT EXISTS resellers (
 CREATE TABLE IF NOT EXISTS reseller_packages (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  amount_usd DECIMAL(10,2) NOT NULL UNIQUE,
+  amount_usd DECIMAL(10,2) NOT NULL,
   price_usd DECIMAL(10,2) NOT NULL,
   is_active BOOLEAN DEFAULT TRUE,
   sort_order INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'reseller_packages_amount_usd_key'
+    AND conrelid = 'reseller_packages'::regclass
+  ) THEN
+    ALTER TABLE reseller_packages ADD CONSTRAINT reseller_packages_amount_usd_key UNIQUE (amount_usd);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS reseller_topups (
   id SERIAL PRIMARY KEY,
