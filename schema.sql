@@ -89,8 +89,16 @@ CREATE TABLE IF NOT EXISTS orders (
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_files TEXT DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_image TEXT DEFAULT '';
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_data BYTEA;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_data TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_mime VARCHAR(100);
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='orders' AND column_name='payment_proof_data' AND data_type='bytea'
+  ) THEN
+    ALTER TABLE orders ALTER COLUMN payment_proof_data TYPE TEXT USING NULL;
+  END IF;
+END $$;
 
 INSERT INTO settings (key, value) SELECT 'store_name', 'FF Panel' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'store_name');
 INSERT INTO settings (key, value) SELECT 'upi_id', 'yourupi@bank' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'upi_id');
