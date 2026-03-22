@@ -29,6 +29,9 @@ const mediaFilter = (req, file, cb) => {
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 const mediaUpload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 }, fileFilter: mediaFilter });
 
+// Memory-only storage for branding — never writes to disk, survives Render redeploys
+const brandingUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
 const router = express.Router();
 router.use(authMiddleware, adminMiddleware);
 
@@ -311,8 +314,13 @@ router.put('/orders/:id', async (req, res) => {
       [finalStatus, autoKey, autoNotes, delivered_files, req.params.id]
     );
 
-    await client.query('COMMIT');
-    res.json({ success: true, auto_key: !!autoKey && status === 'approved' });
+    // Auto-delete payment proof screenshot when delivered — keeps DB clean
+      if (finalStatus === 'delivered') {
+        await client.query('UPDATE orders SET payment_proof_data = NULL, payment_proof_mime = NULL WHERE id = $1', [req.params.id]);
+      }
+
+      await client.query('COMMIT');
+      res.json({ success: true, auto_key: !!autoKey && status === 'approved' });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: err.message });
@@ -738,28 +746,47 @@ router.delete('/customer-key-pool-bulk', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/upload-branding', upload.single('file'), async (req, res) => {
+router.post('/upload-branding', brandingUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const { type } = req.body;
     if (!type) return res.status(400).json({ error: 'Type required' });
     const key = `branding_${type}`;
-    const filePath = path.join(uploadsDir, req.file.filename);
-    const fileData = fs.readFileSync(filePath);
 
     async function upsertSetting(k, v) {
       const r = await pool.query('UPDATE settings SET value = $2 WHERE key = $1', [k, v]);
       if (r.rowCount === 0) await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2)', [k, v]);
     }
 
-    await upsertSetting(key, req.file.filename);
-    await upsertSetting(`${key}_data`, fileData.toString('base64'));
+    // Store base64 in database — no disk write needed, survives Render redeploys
+    await upsertSetting(`${key}_data`, req.file.buffer.toString('base64'));
     await upsertSetting(`${key}_mime`, req.file.mimetype);
-    res.json({ filename: req.file.filename });
+    res.json({ success: true, type });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/vapid-public-key', async (req, res) => {
+// Clear branding from database
+  router.delete('/branding/:type', async (req, res) => {
+    try {
+      const { type } = req.params;
+      await pool.query('DELETE FROM settings WHERE key = $1 OR key = $2', [`branding_${type}_data`, `branding_${type}_mime`]);
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Serve payment proof image from DB — no disk dependency
+  router.get('/orders/:id/proof', async (req, res) => {
+    try {
+      const result = await pool.query('SELECT payment_proof_data, payment_proof_mime FROM orders WHERE id = $1', [req.params.id]);
+      if (!result.rows[0]?.payment_proof_data) return res.status(404).json({ error: 'No proof found' });
+      const buffer = Buffer.from(result.rows[0].payment_proof_data, 'base64');
+      res.setHeader('Content-Type', result.rows[0].payment_proof_mime || 'image/jpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(buffer);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  router.get('/vapid-public-key', async (req, res) => {
   try {
     const result = await pool.query("SELECT value FROM settings WHERE key = 'vapid_public_key'");
     res.json({ key: result.rows[0]?.value || '' });

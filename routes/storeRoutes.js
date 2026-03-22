@@ -38,7 +38,21 @@ router.get('/settings', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/sections', async (req, res) => {
+// Public branding endpoint — serves logo/favicon/banner from database, no disk needed
+  router.get('/branding/:type', async (req, res) => {
+    try {
+      const { type } = req.params;
+      const dataResult = await pool.query('SELECT value FROM settings WHERE key = $1', [`branding_${type}_data`]);
+      const mimeResult = await pool.query('SELECT value FROM settings WHERE key = $1', [`branding_${type}_mime`]);
+      if (!dataResult.rows[0]?.value) return res.status(404).json({ error: 'Not found' });
+      const buffer = Buffer.from(dataResult.rows[0].value, 'base64');
+      res.setHeader('Content-Type', mimeResult.rows[0]?.value || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(buffer);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  router.get('/sections', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM sections WHERE is_active = true ORDER BY sort_order, id');
     res.json(result.rows);
