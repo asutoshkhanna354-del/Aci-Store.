@@ -50,7 +50,10 @@ router.put('/settings', async (req, res) => {
     for (const [key, value] of entries) {
       if (value === null || value === undefined) continue;
       const strVal = typeof value === 'object' ? JSON.stringify(value) : String(value);
-      await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2', [key, strVal]);
+      const updated = await pool.query('UPDATE settings SET value = $2 WHERE key = $1', [key, strVal]);
+      if (updated.rowCount === 0) {
+        await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2)', [key, strVal]);
+      }
     }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -743,18 +746,15 @@ router.post('/upload-branding', upload.single('file'), async (req, res) => {
     const key = `branding_${type}`;
     const filePath = path.join(uploadsDir, req.file.filename);
     const fileData = fs.readFileSync(filePath);
-    await pool.query(
-      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
-      [key, req.file.filename]
-    );
-    await pool.query(
-      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
-      [`${key}_data`, fileData.toString('base64')]
-    );
-    await pool.query(
-      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
-      [`${key}_mime`, req.file.mimetype]
-    );
+
+    async function upsertSetting(k, v) {
+      const r = await pool.query('UPDATE settings SET value = $2 WHERE key = $1', [k, v]);
+      if (r.rowCount === 0) await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2)', [k, v]);
+    }
+
+    await upsertSetting(key, req.file.filename);
+    await upsertSetting(`${key}_data`, fileData.toString('base64'));
+    await upsertSetting(`${key}_mime`, req.file.mimetype);
     res.json({ filename: req.file.filename });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -772,10 +772,9 @@ router.post('/push-subscribe', async (req, res) => {
     if (!subscription || !subscription.endpoint) return res.status(400).json({ error: 'Invalid subscription' });
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+    await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [subscription.endpoint]);
     await pool.query(
-      `INSERT INTO push_subscriptions (user_id, endpoint, keys_p256dh, keys_auth) 
-       VALUES ($1, $2, $3, $4) 
-       ON CONFLICT (endpoint) DO UPDATE SET user_id = $1, keys_p256dh = $3, keys_auth = $4`,
+      `INSERT INTO push_subscriptions (user_id, endpoint, keys_p256dh, keys_auth) VALUES ($1, $2, $3, $4)`,
       [userId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
     );
     res.json({ success: true });
