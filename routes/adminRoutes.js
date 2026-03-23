@@ -192,10 +192,14 @@ router.post('/panels/:id/images', async (req, res) => {
         const isVideo = mime.startsWith('video/');
         let uploadRes;
         if (isVideo) {
-          uploadRes = await cloudinary.uploader.upload_large(data_url, {
-            folder: 'panel-images',
-            resource_type: 'video',
-            chunk_size: 6000000
+          const base64 = data_url.split(',')[1] || data_url;
+          const buffer = Buffer.from(base64, 'base64');
+          uploadRes = await new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream(
+              { folder: 'panel-images', resource_type: 'video' },
+              (error, result) => { if (error) reject(error); else resolve(result); }
+            );
+            stream.end(buffer);
           });
         } else {
           uploadRes = await cloudinary.uploader.upload(data_url, {
