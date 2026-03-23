@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { authMiddleware, adminMiddleware } = require('../auth');
+const cloudinary = require('../cloudinary');
 
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -189,11 +190,16 @@ router.post('/panels/:id/images', async (req, res) => {
         if (!data_url) continue;
         const mime = data_url.split(';')[0].replace('data:', '');
         const isVideo = mime.startsWith('video/');
+        const uploadRes = await cloudinary.uploader.upload(data_url, {
+          folder: 'panel-images',
+          resource_type: isVideo ? 'video' : 'image'
+        });
+        const cloudUrl = uploadRes.secure_url;
         const result = await pool.query(
           'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type, file_data, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, panel_id, filename, original_name, sort_order, media_type, created_at',
-          [panelId, filename || 'image', filename || 'image', sortOrder++, media_type || (isVideo ? 'video' : 'image'), Buffer.from(data_url), mime]
+          [panelId, filename || 'image', filename || 'image', sortOrder++, media_type || (isVideo ? 'video' : 'image'), cloudUrl, mime]
         );
-        saved.push({ ...result.rows[0], data_url });
+        saved.push({ ...result.rows[0], data_url: cloudUrl });
       }
       res.json(saved);
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -264,8 +270,8 @@ router.get('/orders', async (req, res) => {
     const rows = result.rows.map(r => {
         let proof_data_url = null;
         if (r.payment_proof_data) {
-          const b64 = Buffer.isBuffer(r.payment_proof_data) ? r.payment_proof_data.toString() : String(r.payment_proof_data);
-          proof_data_url = `data:${r.payment_proof_mime || 'image/jpeg'};base64,${b64}`;
+          const val = Buffer.isBuffer(r.payment_proof_data) ? r.payment_proof_data.toString() : String(r.payment_proof_data);
+          proof_data_url = val.startsWith('http') ? val : `data:${r.payment_proof_mime || 'image/jpeg'};base64,${val}`;
         }
         return { ...r, proof_data_url, payment_proof_data: undefined };
       });
@@ -761,25 +767,31 @@ router.post('/upload-branding', async (req, res) => {
       if (!type || !data_url) return res.status(400).json({ error: 'type and data_url required' });
       const key = `branding_${type}`;
       const mime = data_url.split(';')[0].replace('data:', '');
-      const base64 = data_url.split(',')[1] || '';
       async function upsertSetting(k, v) {
         const r = await pool.query('UPDATE settings SET value = $2 WHERE key = $1', [k, v]);
         if (r.rowCount === 0) await pool.query('INSERT INTO settings (key, value) VALUES ($1, $2)', [k, v]);
       }
-      await upsertSetting(`${key}_data`, base64);
+      const uploadRes = await cloudinary.uploader.upload(data_url, {
+        folder: 'branding',
+        resource_type: 'image'
+      });
+      const cloudUrl = uploadRes.secure_url;
+      await upsertSetting(`${key}_data`, cloudUrl);
       await upsertSetting(`${key}_mime`, mime);
-      res.json({ success: true, type, data_url });
+      res.json({ success: true, type, data_url: cloudUrl });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });;
 
-// Serve panel image/video from DB — no disk dependency
+// Serve panel image/video — redirect to Cloudinary for new records, fallback binary for old base64
   router.get('/panels/:panelId/images/:imageId/data', async (req, res) => {
     try {
       const result = await pool.query('SELECT file_data, mime_type FROM panel_images WHERE id = $1 AND panel_id = $2', [req.params.imageId, req.params.panelId]);
       if (!result.rows[0]?.file_data) return res.status(404).json({ error: 'Image not found' });
+      const val = result.rows[0].file_data.toString();
+      if (val.startsWith('http')) return res.redirect(val);
       res.setHeader('Content-Type', result.rows[0].mime_type || 'image/jpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(result.rows[0].file_data);
+      res.send(Buffer.from(val.split(',')[1] || val, 'base64'));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -792,12 +804,14 @@ router.post('/upload-branding', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Serve payment proof image from DB — no disk dependency
+  // Serve payment proof — redirect to Cloudinary for new records, fallback binary for old base64
   router.get('/orders/:id/proof', async (req, res) => {
     try {
       const result = await pool.query('SELECT payment_proof_data, payment_proof_mime FROM orders WHERE id = $1', [req.params.id]);
       if (!result.rows[0]?.payment_proof_data) return res.status(404).json({ error: 'No proof found' });
-      const buffer = Buffer.from(Buffer.isBuffer(result.rows[0].payment_proof_data) ? result.rows[0].payment_proof_data.toString() : result.rows[0].payment_proof_data, 'base64');
+      const val = Buffer.isBuffer(result.rows[0].payment_proof_data) ? result.rows[0].payment_proof_data.toString() : String(result.rows[0].payment_proof_data);
+      if (val.startsWith('http')) return res.redirect(val);
+      const buffer = Buffer.from(val, 'base64');
       res.setHeader('Content-Type', result.rows[0].payment_proof_mime || 'image/jpeg');
       res.setHeader('Cache-Control', 'no-store');
       res.send(buffer);
