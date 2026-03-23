@@ -44,7 +44,10 @@ router.get('/settings', async (req, res) => {
   try {
     const result = await pool.query('SELECT key, value FROM settings');
     const settings = {};
-    result.rows.forEach(r => { settings[r.key] = r.value; });
+    result.rows.forEach(r => {
+      if (r.key.endsWith('_data') && r.value && !r.value.startsWith('http')) return;
+      settings[r.key] = r.value;
+    });
     res.json(settings);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -176,6 +179,18 @@ router.get('/panels/:id/images', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });;
 
+router.get('/cloudinary-sign', async (req, res) => {
+  try {
+    const timestamp = Math.round(Date.now() / 1000);
+    const folder = 'panel-images';
+    const signature = cloudinary.utils.api_sign_request(
+      { timestamp, folder },
+      process.env.CLOUDINARY_API_SECRET || 'IsXIkXYM8mvpL8vIODdPo9OFkaY'
+    );
+    res.json({ timestamp, signature, api_key: process.env.CLOUDINARY_API_KEY || '582146857682658', cloud_name: 'drn5onxvd', folder });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.post('/panels/:id/images', async (req, res) => {
     try {
       const panelId = req.params.id;
@@ -186,28 +201,22 @@ router.post('/panels/:id/images', async (req, res) => {
       const uploadedImages = req.body?.images || [];
       const saved = [];
       for (const img of uploadedImages) {
-        const { data_url, filename, media_type } = img;
-        if (!data_url) continue;
-        const mime = data_url.split(';')[0].replace('data:', '');
-        const isVideo = mime.startsWith('video/');
-        let uploadRes;
-        if (isVideo) {
-          const base64 = data_url.split(',')[1] || data_url;
-          const buffer = Buffer.from(base64, 'base64');
-          uploadRes = await new Promise((resolve, reject) => {
-            const stream = cloudinary.uploader.upload_stream(
-              { folder: 'panel-images', resource_type: 'video' },
-              (error, result) => { if (error) reject(error); else resolve(result); }
-            );
-            stream.end(buffer);
-          });
+        const { data_url, cloudinary_url, filename, media_type } = img;
+        if (!data_url && !cloudinary_url) continue;
+        let cloudUrl, mime, isVideo;
+        if (cloudinary_url) {
+          cloudUrl = cloudinary_url;
+          isVideo = media_type === 'video';
+          mime = isVideo ? 'video/mp4' : 'image/jpeg';
         } else {
-          uploadRes = await cloudinary.uploader.upload(data_url, {
+          mime = data_url.split(';')[0].replace('data:', '');
+          isVideo = mime.startsWith('video/');
+          const uploadRes = await cloudinary.uploader.upload(data_url, {
             folder: 'panel-images',
             resource_type: 'image'
           });
+          cloudUrl = uploadRes.secure_url;
         }
-        const cloudUrl = uploadRes.secure_url;
         const result = await pool.query(
           'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type, file_data, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, panel_id, filename, original_name, sort_order, media_type, created_at',
           [panelId, filename || 'image', filename || 'image', sortOrder++, media_type || (isVideo ? 'video' : 'image'), cloudUrl, mime]

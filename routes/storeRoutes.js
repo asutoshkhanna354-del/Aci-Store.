@@ -15,7 +15,10 @@ router.get('/settings', async (req, res) => {
   try {
     const result = await pool.query('SELECT key, value FROM settings');
     const settings = {};
-    result.rows.forEach(r => { settings[r.key] = r.value; });
+    result.rows.forEach(r => {
+      if (r.key.endsWith('_data') && r.value && !r.value.startsWith('http')) return;
+      settings[r.key] = r.value;
+    });
     res.json(settings);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
