@@ -190,10 +190,19 @@ router.post('/panels/:id/images', async (req, res) => {
         if (!data_url) continue;
         const mime = data_url.split(';')[0].replace('data:', '');
         const isVideo = mime.startsWith('video/');
-        const uploadRes = await cloudinary.uploader.upload(data_url, {
-          folder: 'panel-images',
-          resource_type: isVideo ? 'video' : 'image'
-        });
+        let uploadRes;
+        if (isVideo) {
+          uploadRes = await cloudinary.uploader.upload_large(data_url, {
+            folder: 'panel-images',
+            resource_type: 'video',
+            chunk_size: 6000000
+          });
+        } else {
+          uploadRes = await cloudinary.uploader.upload(data_url, {
+            folder: 'panel-images',
+            resource_type: 'image'
+          });
+        }
         const cloudUrl = uploadRes.secure_url;
         const result = await pool.query(
           'INSERT INTO panel_images (panel_id, filename, original_name, sort_order, media_type, file_data, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, panel_id, filename, original_name, sort_order, media_type, created_at',
