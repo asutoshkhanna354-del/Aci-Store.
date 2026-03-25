@@ -11,6 +11,9 @@ const { sendPushToAdmins } = require('../pushNotify');
 const router = express.Router();
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 
+const brandingCache = new Map();
+const BRANDING_TTL = 10 * 60 * 1000;
+
 router.get('/settings', async (req, res) => {
   try {
     const result = await pool.query('SELECT key, value FROM settings');
@@ -23,19 +26,27 @@ router.get('/settings', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Public branding endpoint — redirects to Cloudinary for new records, fallback binary for old base64
+// Public branding endpoint — cached in memory to avoid DB hit on every page load
   router.get('/branding/:type', async (req, res) => {
     try {
       const { type } = req.params;
+      const cached = brandingCache.get(type);
+      if (cached && Date.now() - cached.ts < BRANDING_TTL) {
+        if (cached.val.startsWith('http')) return res.redirect(cached.val);
+        res.setHeader('Content-Type', cached.mime || 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(Buffer.from(cached.val, 'base64'));
+      }
       const dataResult = await pool.query('SELECT value FROM settings WHERE key = $1', [`branding_${type}_data`]);
       const mimeResult = await pool.query('SELECT value FROM settings WHERE key = $1', [`branding_${type}_mime`]);
       if (!dataResult.rows[0]?.value) return res.status(404).json({ error: 'Not found' });
       const val = dataResult.rows[0].value;
+      const mime = mimeResult.rows[0]?.value || 'image/jpeg';
+      brandingCache.set(type, { val, mime, ts: Date.now() });
       if (val.startsWith('http')) return res.redirect(val);
-      const buffer = Buffer.from(val, 'base64');
-      res.setHeader('Content-Type', mimeResult.rows[0]?.value || 'image/jpeg');
+      res.setHeader('Content-Type', mime);
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(buffer);
+      res.send(Buffer.from(val, 'base64'));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -267,7 +278,10 @@ router.post('/order/:id/proof', authMiddleware, async (req, res) => {
 
 router.get('/my-orders', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    const result = await pool.query(
+      'SELECT id, user_id, panel_id, panel_name, duration, amount, currency, status, payment_method, payment_utr, payment_proof_image, payment_proof_mime, key_delivered, admin_notes, delivered_files, created_at, updated_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC',
+      [req.user.id]
+    );
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
