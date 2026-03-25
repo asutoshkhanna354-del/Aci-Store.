@@ -249,17 +249,22 @@ INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '
 
 CREATE TABLE IF NOT EXISTS admin_notifications (
   id SERIAL PRIMARY KEY,
-  type VARCHAR(50) NOT NULL,
-  title VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL DEFAULT 'new_order',
+  title VARCHAR(255) NOT NULL DEFAULT '',
   message TEXT DEFAULT '',
   order_id INT,
   is_read BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS type VARCHAR(50) NOT NULL DEFAULT 'new_order';
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS message TEXT DEFAULT '';
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS order_id INT;
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS is_read BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id SERIAL PRIMARY KEY,
-  user_id INT REFERENCES users(id) ON DELETE CASCADE,
+  user_id INT,
   endpoint TEXT NOT NULL,
   keys_p256dh TEXT NOT NULL,
   keys_auth TEXT NOT NULL,
