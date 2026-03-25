@@ -279,7 +279,7 @@ router.post('/order/:id/proof', authMiddleware, async (req, res) => {
 router.get('/my-orders', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, user_id, panel_id, panel_name, duration, amount, currency, status, payment_method, payment_utr, payment_proof_image, payment_proof_mime, key_delivered, admin_notes, delivered_files, created_at, updated_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC',
+      'SELECT id, user_id, panel_id, panel_name, duration, price, discount, final_price, promo_code, utr_number, payment_method, payment_proof_image, payment_proof_mime, status, key_delivered, admin_notes, delivered_files, created_at, updated_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC',
       [req.user.id]
     );
     res.json(result.rows);
