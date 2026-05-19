@@ -2,13 +2,67 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const pool = require('../db');
 const { generateToken, authMiddleware } = require('../auth');
+const { sendOtpEmail } = require('../brevo');
 
 const router = express.Router();
+
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) return res.status(400).json({ error: 'Email already registered' });
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await pool.query('DELETE FROM email_otps WHERE email = $1', [email]);
+    await pool.query(
+      'INSERT INTO email_otps (email, otp, expires_at) VALUES ($1, $2, $3)',
+      [email, otp, expiresAt]
+    );
+
+    await sendOtpEmail(email, otp);
+    res.json({ success: true, message: 'OTP sent to your email' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: 'Email and OTP are required' });
+
+    const result = await pool.query(
+      'SELECT * FROM email_otps WHERE email = $1 AND otp = $2 AND verified = FALSE AND expires_at > NOW()',
+      [email, otp]
+    );
+
+    if (result.rows.length === 0) return res.status(400).json({ error: 'Invalid or expired OTP' });
+
+    await pool.query('UPDATE email_otps SET verified = TRUE WHERE email = $1', [email]);
+    res.json({ success: true, message: 'Email verified' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/register', async (req, res) => {
   try {
     const { username, email, password, telegram_username } = req.body;
     if (!username || !email || !password) return res.status(400).json({ error: 'All fields required' });
+
+    const otpCheck = await pool.query(
+      'SELECT id FROM email_otps WHERE email = $1 AND verified = TRUE',
+      [email]
+    );
+    if (otpCheck.rows.length === 0) return res.status(400).json({ error: 'Please verify your email with OTP first' });
 
     const exists = await pool.query('SELECT id FROM users WHERE username = $1 OR email = $2', [username, email]);
     if (exists.rows.length > 0) return res.status(400).json({ error: 'Username or email already exists' });
@@ -18,6 +72,8 @@ router.post('/register', async (req, res) => {
       'INSERT INTO users (username, email, password, telegram_username) VALUES ($1, $2, $3, $4) RETURNING id, username, email, is_admin, telegram_username',
       [username, email, hash, telegram_username || '']
     );
+
+    await pool.query('DELETE FROM email_otps WHERE email = $1', [email]);
 
     const user = result.rows[0];
     const token = generateToken(user);
@@ -32,7 +88,6 @@ router.post('/login', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'All fields required' });
 
-    // Check admins table first
     let result = await pool.query('SELECT id, username, password, role, permissions FROM admins WHERE username = $1', [username]);
     let user;
     let isAdmin = false;
@@ -51,14 +106,14 @@ router.post('/login', async (req, res) => {
 
     const token = generateToken({ ...user, is_admin: isAdmin || user.is_admin });
     res.json({
-      user: { 
-        id: user.id, 
-        username: user.username, 
-        email: user.email || '', 
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email || '',
         is_admin: isAdmin || user.is_admin,
         role: user.role || (user.is_admin ? 'main_admin' : null),
         permissions: user.permissions || {},
-        telegram_username: user.telegram_username || '' 
+        telegram_username: user.telegram_username || ''
       },
       token
     });
