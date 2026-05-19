@@ -12,7 +12,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "cloudinary": "^2.6.1",
     "@vitejs/plugin-react": "^5.1.4",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
