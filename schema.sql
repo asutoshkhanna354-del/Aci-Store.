@@ -89,8 +89,16 @@ CREATE TABLE IF NOT EXISTS orders (
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_files TEXT DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_image TEXT DEFAULT '';
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_data BYTEA;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_data TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_mime VARCHAR(100);
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='orders' AND column_name='payment_proof_data' AND data_type='bytea'
+  ) THEN
+    ALTER TABLE orders ALTER COLUMN payment_proof_data TYPE TEXT USING NULL;
+  END IF;
+END $$;
 
 INSERT INTO settings (key, value) SELECT 'store_name', 'FF Panel' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'store_name');
 INSERT INTO settings (key, value) SELECT 'upi_id', 'yourupi@bank' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'upi_id');
@@ -241,17 +249,22 @@ INSERT INTO reseller_packages (name, amount_usd, price_usd, sort_order) SELECT '
 
 CREATE TABLE IF NOT EXISTS admin_notifications (
   id SERIAL PRIMARY KEY,
-  type VARCHAR(50) NOT NULL,
-  title VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL DEFAULT 'new_order',
+  title VARCHAR(255) NOT NULL DEFAULT '',
   message TEXT DEFAULT '',
   order_id INT,
   is_read BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS type VARCHAR(50) NOT NULL DEFAULT 'new_order';
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS message TEXT DEFAULT '';
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS order_id INT;
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS is_read BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id SERIAL PRIMARY KEY,
-  user_id INT REFERENCES users(id) ON DELETE CASCADE,
+  user_id INT,
   endpoint TEXT NOT NULL,
   keys_p256dh TEXT NOT NULL,
   keys_auth TEXT NOT NULL,
@@ -270,12 +283,3 @@ INSERT INTO settings (key, value) SELECT 'reseller_key_price_30day', '35' WHERE 
 
 UPDATE settings SET value = (SELECT value FROM settings WHERE key = 'payment_method_bd') WHERE key IN ('payment_method_bkash', 'payment_method_nagad') AND EXISTS (SELECT 1 FROM settings WHERE key = 'payment_method_bd' AND value = 'true') AND value = 'false';
 DELETE FROM settings WHERE key = 'payment_method_bd';
-
-CREATE TABLE IF NOT EXISTS email_otps (
-  id SERIAL PRIMARY KEY,
-  email VARCHAR(255) NOT NULL,
-  otp VARCHAR(6) NOT NULL,
-  verified BOOLEAN DEFAULT FALSE,
-  expires_at TIMESTAMP NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW()
-);

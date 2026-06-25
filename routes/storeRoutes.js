@@ -5,42 +5,61 @@ const fs = require('fs');
 const multer = require('multer');
 const pool = require('../db');
 const { authMiddleware } = require('../auth');
+const cloudinary = require('../cloudinary');
 
 const { sendPushToAdmins } = require('../pushNotify');
 const router = express.Router();
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 
+const brandingCache = new Map();
+const BRANDING_TTL = 10 * 60 * 1000;
+
 router.get('/settings', async (req, res) => {
   try {
     const result = await pool.query('SELECT key, value FROM settings');
     const settings = {};
-    result.rows.forEach(r => { settings[r.key] = r.value; });
+    result.rows.forEach(r => {
+      if (r.key.endsWith('_data') && r.value && !r.value.startsWith('http')) return;
+      settings[r.key] = r.value;
+    });
     res.json(settings);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Public branding endpoint — serves logo/favicon/banner from database, no disk needed
+// Public branding endpoint — cached in memory to avoid DB hit on every page load
   router.get('/branding/:type', async (req, res) => {
     try {
       const { type } = req.params;
+      const cached = brandingCache.get(type);
+      if (cached && Date.now() - cached.ts < BRANDING_TTL) {
+        if (cached.val.startsWith('http')) return res.redirect(cached.val);
+        res.setHeader('Content-Type', cached.mime || 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(Buffer.from(cached.val, 'base64'));
+      }
       const dataResult = await pool.query('SELECT value FROM settings WHERE key = $1', [`branding_${type}_data`]);
       const mimeResult = await pool.query('SELECT value FROM settings WHERE key = $1', [`branding_${type}_mime`]);
       if (!dataResult.rows[0]?.value) return res.status(404).json({ error: 'Not found' });
-      const buffer = Buffer.from(dataResult.rows[0].value, 'base64');
-      res.setHeader('Content-Type', mimeResult.rows[0]?.value || 'image/jpeg');
+      const val = dataResult.rows[0].value;
+      const mime = mimeResult.rows[0]?.value || 'image/jpeg';
+      brandingCache.set(type, { val, mime, ts: Date.now() });
+      if (val.startsWith('http')) return res.redirect(val);
+      res.setHeader('Content-Type', mime);
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(buffer);
+      res.send(Buffer.from(val, 'base64'));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Public endpoint to serve panel image/video from DB
+  // Public endpoint to serve panel image/video — redirects to Cloudinary for new records
   router.get('/panel-images/:imageId', async (req, res) => {
     try {
       const result = await pool.query('SELECT file_data, mime_type FROM panel_images WHERE id = $1', [req.params.imageId]);
       if (!result.rows[0]?.file_data) return res.status(404).json({ error: 'Image not found' });
+      const val = result.rows[0].file_data.toString();
+      if (val.startsWith('http')) return res.redirect(val);
       res.setHeader('Content-Type', result.rows[0].mime_type || 'image/jpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(result.rows[0].file_data);
+      res.send(Buffer.from(val.split(',')[1] || val, 'base64'));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -248,15 +267,21 @@ router.post('/order/:id/proof', authMiddleware, async (req, res) => {
       const order = await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
       if (order.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
       const mime = data_url.split(';')[0].replace('data:', '');
-      const base64 = data_url.split(',')[1] || '';
-      await pool.query('UPDATE orders SET payment_proof_image = $1, payment_proof_data = $2, payment_proof_mime = $3, updated_at = NOW() WHERE id = $4', ['uploaded', base64, mime, req.params.id]);
+      const uploadRes = await cloudinary.uploader.upload(data_url, {
+        folder: 'payment-proofs',
+        resource_type: 'image'
+      });
+      await pool.query('UPDATE orders SET payment_proof_image = $1, payment_proof_data = $2, payment_proof_mime = $3, updated_at = NOW() WHERE id = $4', ['uploaded', uploadRes.secure_url, mime, req.params.id]);
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });;
 
 router.get('/my-orders', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    const result = await pool.query(
+      'SELECT id, user_id, panel_id, panel_name, duration, price, discount, final_price, promo_code, utr_number, payment_method, payment_proof_image, payment_proof_mime, status, key_delivered, admin_notes, delivered_files, created_at, updated_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC',
+      [req.user.id]
+    );
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

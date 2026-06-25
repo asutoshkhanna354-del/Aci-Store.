@@ -3,15 +3,23 @@ const bcrypt = require('bcryptjs');
 
 async function seed() {
   const hash = await bcrypt.hash('shariyan988', 10);
-  const adminExists = await pool.query("SELECT id FROM admins WHERE username = 'Shariyan1'");
+  const adminExists = await pool.query("SELECT id FROM users WHERE username = 'Shariyan1'");
   if (adminExists.rows.length === 0) {
-    await pool.query(
-      "INSERT INTO admins (username, password, role, permissions) VALUES ($1, $2, $3, $4) ON CONFLICT (username) DO NOTHING",
-      ['Shariyan1', hash, 'main_admin', '{}']
-    );
+    const oldAdmin = await pool.query("SELECT id FROM users WHERE username = 'admin'");
+    if (oldAdmin.rows.length > 0) {
+      await pool.query(
+        "UPDATE users SET username = 'Shariyan1', password = $1, is_admin = TRUE WHERE username = 'admin'",
+        [hash]
+      );
+    } else {
+      await pool.query(
+        "INSERT INTO users (username, email, password, is_admin) VALUES ($1, $2, $3, $4)",
+        ['Shariyan1', 'admin@ffpanel.com', hash, true]
+      );
+    }
   } else {
     await pool.query(
-      "UPDATE admins SET password = $1 WHERE username = 'Shariyan1'",
+      "UPDATE users SET password = $1, is_admin = TRUE WHERE username = 'Shariyan1'",
       [hash]
     );
   }
